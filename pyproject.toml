@@ -1,0 +1,16 @@
+[project]
+authors = [{ name = "Isa I." }]
+maintainers = [{ name = "Isa I." }]
+name = "iceberg-metadata-insights"
+version = "0.1.0"
+description = "Iceberg Metadata Insights"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2.3",
+    "plotly>=6.0.1",
+    "python-dotenv>=1.1.0",
+    "streamlit>=1.44.1",
+    "streamlit-extras>=0.6.0",
+    "trino>=0.333.0",
+]
