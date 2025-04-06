@@ -8,11 +8,17 @@ from streamlit_extras.metric_cards import style_metric_cards
 from streamlit_extras.theme import st_theme
 from ydata_profiling import ProfileReport
 from streamlit_ydata_profiling import st_profile_report
+from ydata_profiling import ProfileReport
+from streamlit_ydata_profiling import st_profile_report
 
 from utils.connection import (
     init_connection,
     execute_alter_table,
+    execute_alter_table,
     fetch_stats,
+    load_column_sizes,
+    load_daily_growth,
+    load_file_details,
     load_column_sizes,
     load_daily_growth,
     load_file_details,
@@ -128,6 +134,8 @@ def main():
 
         st.divider()
         st.subheader("📈 Snapshots")
+        st.divider()
+        st.subheader("📈 Snapshots")
         snapshot_history = load_snapshot_history(cursor, schema, table)
         snapshots_tab = st.tabs(
             [
@@ -165,7 +173,31 @@ def main():
                 )
                 st.plotly_chart(fig_growth, use_container_width=True)
                 with st.expander("Detailed Daily Growth Data"):
-                    st.dataframe(daily_growth)
+                    daily_growth["Committed At"] = pd.to_datetime(
+                        daily_growth["Committed At"]
+                    ).dt.date
+
+                    detail_tabs = st.tabs(
+                        ["Raw Data", "Added Rows by Day", "Deleted Rows by Day"]
+                    )
+
+                    with detail_tabs[0]:
+                        st.dataframe(daily_growth)
+
+                    with detail_tabs[1]:
+                        st.dataframe(
+                            daily_growth[["Committed At", "Added Rows Count"]]
+                            .groupby("Committed At")
+                            .sum()
+                        )
+
+                    with detail_tabs[2]:
+                        st.dataframe(
+                            daily_growth[["Committed At", "Deleted Rows Count"]]
+                            .groupby("Committed At")
+                            .sum()
+                        )
+
             else:
                 st.info("No daily growth data available.")
         with snapshots_tab[2]:
@@ -323,6 +355,20 @@ def main():
                             deleted_rows_count   
                         FROM {schema}."{table}$manifests"
                         '''
+                        f'''
+                        SELECT
+                            path,
+                            length,
+                            partition_spec_id,
+                            added_snapshot_id,
+                            added_data_files_count,
+                            added_rows_count,
+                            existing_data_files_count,
+                            existing_rows_count,
+                            deleted_data_files_count,
+                            deleted_rows_count   
+                        FROM {schema}."{table}$manifests"
+                        '''
                     ).fetchall(),
                     columns=[
                         "Path",
@@ -331,9 +377,12 @@ def main():
                         "Added Snapshot ID",
                         "Added Data Files Count",
                         "Added Rows Count",
+                        "Added Rows Count",
                         "Existing Data Files Count",
                         "Existing Rows Count",
+                        "Existing Rows Count",
                         "Deleted Data Files Count",
+                        "Deleted Rows Count",
                         "Deleted Rows Count",
                     ],
                 )
@@ -344,6 +393,16 @@ def main():
             try:
                 all_manifests_df = pd.DataFrame(
                     cursor.execute(
+                        f'''
+                        SELECT 
+                            path,
+                            length,
+                            partition_spec_id,
+                            added_snapshot_id,
+                            added_data_files_count,
+                            existing_data_files_count,
+                            deleted_data_files_count
+                        FROM {schema}."{table}$all_manifests"'''
                         f'''
                         SELECT 
                             path,
@@ -411,6 +470,7 @@ def main():
                         f'SELECT * FROM {schema}."{table}$partitions"'
                     ).fetchall(),
                     columns=[
+                        "Partition",
                         "Partition",
                         "Record Count",
                         "File Count",
@@ -505,6 +565,7 @@ def main():
                         explorative=True,
                         minimal=True,
                     )
+                    st.subheader(f"Profile Report for {schema}.{table}")
                     st_profile_report(pr, navbar=True)
                     st.dataframe(df)
                     st.success("Profile report generated successfully.")

@@ -16,7 +16,7 @@ TRINO_PORT = int(os.getenv("TRINO_PORT", 8088))
 TRINO_USER = os.getenv("TRINO_USER", "trino")
 TRINO_CATALOG = os.getenv("TRINO_CATALOG", "iceberg")
 TRINO_SCHEMA = os.getenv("TRINO_SCHEMA", "default")
-TRINO_HTTP_SCHEME = os.getenv("TRINO_HTTP_SCHEME", "http")
+TRINO_HTTP_SCHEME = os.getenv("TRINO_HTTP_SCHEME", trino.constants.HTTP)
 
 
 def init_connection() -> Optional[trino.dbapi.Connection]:
@@ -26,13 +26,14 @@ def init_connection() -> Optional[trino.dbapi.Connection]:
     """
 
     try:
-        conn = trino.dbapi.connect(
+        conn: trino.dbapi.Connection = trino.dbapi.connect(
             host=TRINO_HOST,
             port=TRINO_PORT,
             user=TRINO_USER,
             catalog=TRINO_CATALOG,
             schema=TRINO_SCHEMA,
             http_scheme=TRINO_HTTP_SCHEME,
+            source="streamlit_iceberg_metadata_insights",
         )
         return conn
     except Exception as e:
@@ -114,8 +115,8 @@ def load_daily_growth(cursor, schema, table):
         s.committed_at as committed_at,
         added_rows_count as added_rows_count,
         added_data_files_count as added_data_files_count,
-        deleted_data_files_count as deleted_data_files_count,
-        deleted_rows_count as deleted_rows_count
+        deleted_rows_count as deleted_rows_count,
+        deleted_data_files_count as deleted_data_files_count
         from {schema}."{table}$manifests" m
         left join {schema}."{table}$snapshots" s on s.snapshot_id=m.added_snapshot_id
     """).fetchall(),
@@ -123,8 +124,8 @@ def load_daily_growth(cursor, schema, table):
             "Committed At",
             "Added Rows Count",
             "Added Data Files Count",
-            "Deleted Data Files Count",
             "Deleted Rows Count",
+            "Deleted Data Files Count",
         ],
     )
 
