@@ -353,20 +353,6 @@ def main():
                             deleted_rows_count   
                         FROM {schema}."{table}$manifests"
                         '''
-                        f'''
-                        SELECT
-                            path,
-                            length,
-                            partition_spec_id,
-                            added_snapshot_id,
-                            added_data_files_count,
-                            added_rows_count,
-                            existing_data_files_count,
-                            existing_rows_count,
-                            deleted_data_files_count,
-                            deleted_rows_count   
-                        FROM {schema}."{table}$manifests"
-                        '''
                     ).fetchall(),
                     columns=[
                         "Path",
@@ -391,16 +377,6 @@ def main():
             try:
                 all_manifests_df = pd.DataFrame(
                     cursor.execute(
-                        f'''
-                        SELECT 
-                            path,
-                            length,
-                            partition_spec_id,
-                            added_snapshot_id,
-                            added_data_files_count,
-                            existing_data_files_count,
-                            deleted_data_files_count
-                        FROM {schema}."{table}$all_manifests"'''
                         f'''
                         SELECT 
                             path,
