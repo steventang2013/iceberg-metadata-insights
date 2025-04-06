@@ -361,12 +361,9 @@ def main():
                         "Added Snapshot ID",
                         "Added Data Files Count",
                         "Added Rows Count",
-                        "Added Rows Count",
                         "Existing Data Files Count",
                         "Existing Rows Count",
-                        "Existing Rows Count",
                         "Deleted Data Files Count",
-                        "Deleted Rows Count",
                         "Deleted Rows Count",
                     ],
                 )
