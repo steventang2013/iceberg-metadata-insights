@@ -134,8 +134,6 @@ def main():
 
         st.divider()
         st.subheader("📈 Snapshots")
-        st.divider()
-        st.subheader("📈 Snapshots")
         snapshot_history = load_snapshot_history(cursor, schema, table)
         snapshots_tab = st.tabs(
             [
