@@ -40,7 +40,7 @@ TRINO_PORT=your_trino_port
 TRINO_USER=your_trino_user
 TRINO_CATALOG=your_trino_catalog
 TRINO_SCHEMA=your_trino_schema
-TRINO_HTTP_SCHEME=http
+# TRINO_PASSWORD # If applicable
 ```
 
 ## Docker
