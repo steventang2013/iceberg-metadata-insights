@@ -29,6 +29,7 @@ See demo video on LinkedIn: [Iceberg Metadata Insights Demo](https://www.linkedi
   - Running Trino Server with Iceberg connector
   - Hive Metastore
   - Existing iceberg tables
+  - OAuth2 authentication
 
 ## Installation
 
