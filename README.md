@@ -18,7 +18,7 @@ See demo video on LinkedIn: [Iceberg Metadata Insights Demo](https://www.linkedi
 
 ## Prerequisites
 
-- Python 3.8 or higher
+- Python 3.11
 - Required Python libraries:
   - `streamlit`
   - `trino`
@@ -37,26 +37,10 @@ Create .env file in the root directory and add your Trino connection details:
 ```bash
 TRINO_HOST=your_trino_host
 TRINO_PORT=your_trino_port
-TRINO_USER=your_trino_user
+TRINO_USER=""
 TRINO_CATALOG=your_trino_catalog
 TRINO_SCHEMA=your_trino_schema
-# TRINO_PASSWORD # If applicable
-```
-
-## Docker
-
-To run the application in a Docker container, you can use the provided Dockerfile. This allows for easy deployment and isolation of dependencies.
-
-### Build the Docker Image
-
-```bash
-docker build -t iceberg-metadata-insights .
-```
-
-### Run the Docker Container
-
-```bash
-docker run -p 8501:8501 -e TRINO_HOST=your_trino_host -e TRINO_PORT=your_trino_port -e TRINO_USER=your_trino_user iceberg-metadata-insights
+TRINO_EXTERNAL_AUTH=true
 ```
 
 ## How to Run

@@ -8,6 +8,11 @@ WORKDIR /app
 
 COPY uv.lock pyproject.toml /app/
 
+  RUN apt-get update && apt-get install -y \
+      build-essential \
+      gcc \
+      && rm -rf /var/lib/apt/lists/*
+
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 

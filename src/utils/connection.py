@@ -10,6 +10,7 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 import trino
+import trino.auth
 from dotenv import load_dotenv
 
 # Set up logging
@@ -29,8 +30,11 @@ TRINO_SCHEMA = os.getenv(
 TRINO_HTTP_SCHEME = (
     trino.constants.HTTPS if os.getenv("TRINO_PORT") == "443" else trino.constants.HTTP
 )
-TRINO_AUTH = os.getenv("TRINO_AUTH", trino.constants.DEFAULT_AUTH)
+TRINO_AUTH = os.getenv("TRINO_AUTH", None)
+TRINO_EXTERNAL_AUTH = os.getenv("TRINO_EXTERNAL_AUTH", "true").lower() == "true"
 TRINO_PASSWORD = os.getenv("TRINO_PASSWORD", None)
+OAUTH2_CLIENT_ID = os.getenv("OAUTH2_CLIENT_ID", None)
+OAUTH2_CLIENT_SECRET = os.getenv("OAUTH2_CLIENT_SECRET", None)
 # --- Connection Management ---
 
 
@@ -50,12 +54,19 @@ def init_connection() -> Optional[trino.dbapi.Connection]:
             schema=TRINO_SCHEMA,  # Use a default schema initially
             http_scheme=TRINO_HTTP_SCHEME,
             auth=(
-                trino.constants.DEFAULT_AUTH
-                if TRINO_PASSWORD is None
+                trino.auth.OAuth2Authentication()
+                if TRINO_EXTERNAL_AUTH and OAUTH2_CLIENT_ID is None
+                else trino.auth.OAuth2Authentication(
+                    client_id=OAUTH2_CLIENT_ID,
+                    client_secret=OAUTH2_CLIENT_SECRET,
+                )
+                if TRINO_EXTERNAL_AUTH and OAUTH2_CLIENT_ID
                 else trino.auth.BasicAuthentication(
                     TRINO_USER,
                     TRINO_PASSWORD,
                 )
+                if TRINO_PASSWORD
+                else None
             ),
         )
         logger.info(f"Successfully connected to Trino at {TRINO_HOST}:{TRINO_PORT}")
