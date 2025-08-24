@@ -117,19 +117,21 @@ def fetch_stats(_cursor: trino.dbapi.Cursor, schema: str, table: str) -> Optiona
         "Average Records per File": f'SELECT ROUND(AVG(CAST(record_count AS DOUBLE)), 0) FROM "{TRINO_CATALOG}"."{schema}"."{table}$files"',
         "Std Dev File Size (MB)": f'SELECT ROUND(STDDEV_POP(CAST(file_size_in_bytes AS DOUBLE))/1048576, 2) FROM "{TRINO_CATALOG}"."{schema}"."{table}$files"',
         "Variance File Size (Bytes²)": f'SELECT ROUND(VAR_POP(CAST(file_size_in_bytes AS DOUBLE)), 2) FROM "{TRINO_CATALOG}"."{schema}"."{table}$files"',
+        "Current Snapshot Storage Size (Bytes)": f'SELECT COALESCE(SUM(CAST(file_size_in_bytes AS BIGINT)), 0) FROM "{TRINO_CATALOG}"."{schema}"."{table}$files"',
     }
-    try:
-        for key, query in queries.items():
+    for key, query in queries.items():
+        try:
             logger.debug(f"Executing stats query for {key}: {query}")
             result = cursor.execute(query).fetchone()
             # Handle potential None result if table is empty or metadata is missing
             stats[key] = result[0] if result and result[0] is not None else 0
-        logger.info(f"Successfully fetched stats for {schema}.{table}")
-        return stats
-    except Exception as e:
-        logger.error(f"Error fetching stats for {schema}.{table}: {e}", exc_info=True)
-        st.warning(f"Could not fetch stat '{key}': {e}")
-        return None  # Return None or partial dict on error? Returning None indicates overall failure.
+        except Exception as e:
+            logger.error(f"Error fetching stat '{key}' for {schema}.{table}: {e}", exc_info=True)
+            st.warning(f"Could not fetch stat '{key}': {e}")
+            stats[key] = 0  # Set to 0 instead of failing entirely
+    
+    logger.info(f"Successfully fetched stats for {schema}.{table}")
+    return stats
 
 
 @st.cache_data(ttl=600)

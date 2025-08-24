@@ -1,12 +1,14 @@
+import json
 import logging
+import requests
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 from streamlit_extras.metric_cards import style_metric_cards
-from streamlit_extras.theme import st_theme
-
 from utils.connection import (
+    TRINO_CATALOG,
+    TRINO_HOST,
     execute_alter_table,
     fetch_stats,
     get_schemas,
@@ -19,6 +21,58 @@ from utils.connection import (
 )
 from utils.helper import display_dataframe, format_bytes, safe_float
 
+# --- Helper Functions ---
+def get_environment_from_host(host):
+    """Determine environment (prod/dev) from TRINO_HOST"""
+    if "prod" in host.lower():
+        return "prod"
+    elif "dev" in host.lower():
+        return "dev"
+    else:
+        return "prod"  # Default to prod
+
+def call_glue_optimizer_api(table_name, schema_name, operation_type):
+    """Make API call to enable glue optimizer operations"""
+    env = get_environment_from_host(TRINO_HOST)
+    if env == "prod":
+        url = "http://data-lake-manager.prod.attentivemobile.com:4567/api/glueOptimizer/enable"
+    else:
+        url = f"http://data-lake-manager.{env}.attentivemobile.com:4567/api/glueOptimizer/enable"
+    
+    payload = {
+        "tableNames": [table_name],
+        "operationTypes": [operation_type],
+        "databaseName": schema_name
+    }
+    
+    headers = {
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        # Handle empty or non-JSON responses
+        if response.text.strip():
+            try:
+                json_response = response.json()
+                return True, json_response
+            except json.JSONDecodeError:
+                # Parse the text response to check for failures
+                response_text = response.text
+                if "failures" in response_text.lower() and "0 successful operations" in response_text:
+                    return False, response_text
+                elif "AlreadyExistsException" in response_text:
+                    return False, f"Already enabled: {response_text}"
+                else:
+                    return True, {"message": "Success", "response_text": response_text}
+        else:
+            return True, {"message": "Success - no response body"}
+            
+    except requests.exceptions.RequestException as e:
+        return False, str(e)
+
 # --- Page Configuration ---
 st.set_page_config(
     page_title="Iceberg Metadata Insights",
@@ -26,7 +80,7 @@ st.set_page_config(
     layout="wide",
 )
 
-theme = st_theme()
+# theme = st_theme()  # Commented out due to duplicate ID error
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO)
@@ -152,26 +206,141 @@ def main():
                         logger.error(f"Error executing ANALYZE: {e}", exc_info=True)
                         st.error(f"Error executing ANALYZE: {e}")
 
-            # Optimize/Vacuum
+            # Optimize/Vacuum with smart threshold suggestions
+            st.markdown("**Optimize Files**")
+            
+            # Get table stats for smart suggestions (fetch fresh if needed)
+            try:
+                table_stats = fetch_stats(cursor, st.session_state.selected_schema, st.session_state.selected_table)
+                if table_stats:
+                    small_files_count = int(safe_float(table_stats.get('Small Files (<100MB)', 0)))
+                    avg_file_size_mb = safe_float(table_stats.get("Average File Size (MB)", 0))
+                else:
+                    small_files_count = 0
+                    avg_file_size_mb = 0
+            except Exception as e:
+                logger.warning(f"Could not fetch stats for optimization suggestions: {e}")
+                small_files_count = 0
+                avg_file_size_mb = 0
+            
+            # Smart threshold calculation based on table size
+            if st.session_state.get("selected_schema") and st.session_state.get("selected_table"):
+                stats = fetch_stats(cursor, st.session_state.selected_schema, st.session_state.selected_table)
+                if stats:
+                    small_files_count = stats.get("Small Files (<100MB)", 0)
+                    
+                    # Calculate smart threshold based on number of small files
+                    if small_files_count > 2000:
+                        suggested_threshold = "32MB"
+                        help_text = f"🧠 Smart suggestion: {small_files_count} small files detected. Using lower threshold to limit memory usage."
+                    elif small_files_count > 500:
+                        suggested_threshold = "128MB" 
+                        help_text = f"🧠 Smart suggestion: {small_files_count} small files detected. Using moderate threshold."
+                    else:
+                        suggested_threshold = "512MB"
+                        help_text = f"🧠 Smart suggestion: {small_files_count} small files detected. Safe to use higher threshold."
+                else:
+                    suggested_threshold = "128MB"
+                    help_text = "Files smaller than this threshold will be compacted. Lower thresholds process fewer files and use less memory."
+            else:
+                suggested_threshold = "128MB"
+                help_text = "Files smaller than this threshold will be compacted. Lower thresholds process fewer files and use less memory."
+            
             optimize_threshold = st.text_input(
-                "Optimize File Size Threshold (e.g., 128MB)",
-                "128MB",
-                help="Files smaller than this may be compacted. Format: number followed by KB, MB, GB.",
+                "File Size Threshold",
+                suggested_threshold,
+                help=help_text
             )
+            
+            # Advanced optimization options
+            with st.expander("⚙️ Advanced Options"):
+                partition_filter = st.text_input("Partition Filter (Optional)", "", help="e.g., date >= '2024-01-01' to optimize only recent partitions")
+                    
             if st.button(
                 "🔧 Optimize/Compact Files",
                 use_container_width=True,
-                help="Rewrites small files into larger ones based on threshold.",
+                help="Rewrites small files into larger ones. Smart threshold prevents memory issues.",
             ):
-                with st.spinner(
-                    f"Optimizing table with threshold {optimize_threshold}..."
-                ):
+                # Regular optimization with smart threshold
+                with st.spinner(f"Optimizing table with threshold {optimize_threshold}..."):
+                    # Build optimized command with supported parameters
+                    optimize_params = [f"file_size_threshold => '{optimize_threshold}'"]
+                    
+                    # Add partition filter if specified
+                    if partition_filter.strip():
+                        optimize_command = f"optimize(WHERE {partition_filter}, {', '.join(optimize_params)})"
+                    else:
+                        optimize_command = f"optimize({', '.join(optimize_params)})"
+                    
                     execute_alter_table(
                         cursor,
-                        selected_schema,
-                        selected_table,
-                        f"optimize(file_size_threshold => '{optimize_threshold}')",
+                        st.session_state.selected_schema,
+                        st.session_state.selected_table,
+                        optimize_command,
                     )
+
+            st.divider()
+            st.markdown("### 🔧 Glue Optimizer Operations")
+            st.caption("Enable automated optimization operations via Data Lake Manager API")
+            
+            # Enable Compaction
+            if st.button(
+                "📦 Enable Compaction",
+                use_container_width=True,
+                help="Enable automated file compaction for this table",
+            ):
+                with st.spinner("Enabling compaction..."):
+                    success, result = call_glue_optimizer_api(
+                        st.session_state.selected_table,
+                        st.session_state.selected_schema,
+                        "compaction"
+                    )
+                    if success:
+                        st.success("✅ Compaction enabled successfully!")
+                        if result:
+                            st.json(result)
+                    else:
+                        st.error(f"❌ Failed to enable compaction: {result}")
+
+            # Enable Snapshot Cleanup (Retention)
+            if st.button(
+                "🧹 Enable Snapshot Cleanup",
+                use_container_width=True,
+                help="Enable automated snapshot cleanup/retention for this table",
+            ):
+                with st.spinner("Enabling snapshot cleanup..."):
+                    success, result = call_glue_optimizer_api(
+                        st.session_state.selected_table,
+                        st.session_state.selected_schema,
+                        "retention"
+                    )
+                    if success:
+                        st.success("✅ Snapshot cleanup enabled successfully!")
+                        if result:
+                            st.json(result)
+                    else:
+                        st.error(f"❌ Failed to enable snapshot cleanup: {result}")
+
+            # Delete Orphaned Files
+            if st.button(
+                "🗑️ Enable Orphaned File Deletion",
+                use_container_width=True,
+                help="Enable automated deletion of orphaned files for this table",
+            ):
+                with st.spinner("Enabling orphaned file deletion..."):
+                    success, result = call_glue_optimizer_api(
+                        st.session_state.selected_table,
+                        st.session_state.selected_schema,
+                        "orphan_file_deletion"
+                    )
+                    if success:
+                        st.success("✅ Orphaned file deletion enabled successfully!")
+                        if result:
+                            st.json(result)
+                    else:
+                        st.error(f"❌ Failed to enable orphaned file deletion: {result}")
+
+            st.divider()
 
             # Optimize Manifests
             if st.button(
@@ -255,9 +424,11 @@ def main():
 
         # Fetch and display summary stats
         stats = fetch_stats(cursor, selected_schema, selected_table)
-
+        
+        # Force show the table overview regardless of stats
+        st.subheader("📌 Table Overview")
+        
         if stats:
-            st.subheader("📌 Table Overview")
             # Use safe_float and format_bytes for robust display
             row1_cols = st.columns(6)
             row1_cols[0].metric("Files", f"{int(safe_float(stats.get('Files', 0))):,}")
@@ -276,46 +447,71 @@ def main():
                 f"{int(safe_float(stats.get('Small Files (<100MB)', 0))):,}",
             )
 
-            st.subheader("📏 File Size Metrics")
+            # Second row for storage size metrics
             row2_cols = st.columns(6)
             row2_cols[0].metric(
+                "Current Table Size",
+                format_bytes(safe_float(stats.get("Current Snapshot Storage Size (Bytes)", 0))),
+                help="Total storage size of all data files currently part of the table"
+            )
+
+            st.subheader("📏 File Size Metrics")
+            row4_cols = st.columns(6)
+            row4_cols[0].metric(
                 "Avg File Size",
                 format_bytes(
                     safe_float(stats.get("Average File Size (MB)", 0)) * 1024 * 1024
                 ),
             )  # Convert MB back to Bytes for formatter
-            row2_cols[1].metric(
+            row4_cols[1].metric(
                 "Largest File",
                 format_bytes(
                     safe_float(stats.get("Largest File Size (MB)", 0)) * 1024 * 1024
                 ),
             )
-            row2_cols[2].metric(
+            row4_cols[2].metric(
                 "Smallest File",
                 format_bytes(
                     safe_float(stats.get("Smallest File Size (MB)", 0)) * 1024 * 1024
                 ),
             )
-            row2_cols[3].metric(
+            row4_cols[3].metric(
                 "Avg Records/File",
                 f"{int(safe_float(stats.get('Average Records per File', 0))):,}",
             )
-            row2_cols[4].metric(
+            row4_cols[4].metric(
                 "Std Dev File Size",
                 format_bytes(
                     safe_float(stats.get("Std Dev File Size (MB)", 0)) * 1024 * 1024
                 ),
             )
-            if theme.get("base") == "dark":
-                style_metric_cards(
-                    background_color="#1B1C24",
-                    border_color="#292D34",
-                )
-            else:
-                style_metric_cards()
+            # Apply metric card styling with explicit dark theme colors
+            style_metric_cards(
+                background_color="#0E1117",
+                border_color="#262730",
+                border_left_color="#FF6B6B",
+                border_size_px=1,
+                border_radius_px=5,
+                box_shadow="0 0.15rem 1.75rem 0 rgba(58, 59, 69, 0.15) !important"
+            )
 
         else:
             st.warning("Could not fetch summary statistics for the table.")
+            # Show at least the storage metrics even if other stats fail
+            st.subheader("💾 Storage Size Information (Fallback)")
+            try:
+                # Try to get storage info directly
+                conn = init_connection()
+                if conn:
+                    cursor_direct = conn.cursor()
+                    current_size_query = f'SELECT COALESCE(SUM(CAST(file_size_in_bytes AS BIGINT)), 0) FROM "{selected_schema}"."{selected_table}$files"'
+                    result = cursor_direct.execute(current_size_query).fetchone()
+                    if result and result[0]:
+                        st.metric("Current Snapshot Size", format_bytes(result[0]))
+                    else:
+                        st.metric("Current Snapshot Size", "Unable to calculate")
+            except Exception as e:
+                st.error(f"Could not calculate storage size: {e}")
 
         st.divider()
 
@@ -671,13 +867,26 @@ def main():
                     df.drop(
                         columns=["partition_summaries"], inplace=True, errors="ignore"
                     )
-                    display_dataframe(df)  # Use helper to display
+                    
+                    # Wrap display_dataframe in additional try/catch to prevent page crashes
+                    try:
+                        display_dataframe(df)  # Use helper to display
+                    except Exception as display_error:
+                        logger.error(f"Error displaying metadata table {meta_name}: {display_error}", exc_info=True)
+                        st.warning(f"Data loaded but cannot display `{meta_name}` due to formatting issues. Showing raw data instead.")
+                        st.write(f"Rows: {len(df)}, Columns: {list(df.columns)}")
+                        # Try to show at least the first few rows as text
+                        try:
+                            st.text(df.head().to_string())
+                        except:
+                            st.text("Raw data cannot be displayed due to formatting issues")
 
                 except Exception as e:
                     logger.error(
                         f"Error loading metadata table {meta_name}: {e}", exc_info=True
                     )
                     st.error(f"Error loading `{meta_name}`: {e}")
+
 
         st.divider()
 
